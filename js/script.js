@@ -13,6 +13,7 @@ const reverseShellCommand = document.querySelector("#reverse-shell-command");
 const bindShellCommand = document.querySelector("#bind-shell-command");
 const msfVenomCommand = document.querySelector("#msfvenom-command");
 const hoaxShellCommand = document.querySelector("#hoaxshell-command");
+const assembledCommand = document.querySelector("#assembled-command");
 
 const FilterOperatingSystemType = {
     'All': 'all',
@@ -22,16 +23,16 @@ const FilterOperatingSystemType = {
 };
 
 const hoaxshell_listener_types = {
-	"Windows CMD cURL" : "cmd-curl",
-	"PowerShell IEX" : "ps-iex",
-	"PowerShell IEX Constr Lang Mode" : "ps-iex-cm",
-	"PowerShell Outfile" : "ps-outfile",
-	"PowerShell Outfile Constr Lang Mode" : "ps-outfile-cm",
-	"Windows CMD cURL https" : "cmd-curl -c /your/cert.pem -k /your/key.pem",
-	"PowerShell IEX https" : "ps-iex -c /your/cert.pem -k /your/key.pem",
-	"PowerShell IEX Constr Lang Mode https" : "ps-iex-cm -c /your/cert.pem -k /your/key.pem",
-	"PowerShell Outfile https" : "ps-outfile -c /your/cert.pem -k /your/key.pem",
-	"PowerShell Outfile Constr Lang Mode https" : "ps-outfile-cm -c /your/cert.pem -k /your/key.pem"
+    "Windows CMD cURL" : "cmd-curl",
+    "PowerShell IEX" : "ps-iex",
+    "PowerShell IEX Constr Lang Mode" : "ps-iex-cm",
+    "PowerShell Outfile" : "ps-outfile",
+    "PowerShell Outfile Constr Lang Mode" : "ps-outfile-cm",
+    "Windows CMD cURL https" : "cmd-curl -c /your/cert.pem -k /your/key.pem",
+    "PowerShell IEX https" : "ps-iex -c /your/cert.pem -k /your/key.pem",
+    "PowerShell IEX Constr Lang Mode https" : "ps-iex-cm -c /your/cert.pem -k /your/key.pem",
+    "PowerShell Outfile https" : "ps-outfile -c /your/cert.pem -k /your/key.pem",
+    "PowerShell Outfile Constr Lang Mode https" : "ps-outfile-cm -c /your/cert.pem -k /your/key.pem"
 };
 
 operatingSystemSelect.addEventListener("change", (event) => {
@@ -75,7 +76,15 @@ document.querySelector("#hoaxshell-tab").addEventListener("click", () => {
     document.querySelector("#hoaxshell-selection").innerHTML = "";
     rsg.setState({
         commandType: CommandType.HoaxShell,
-		encoding: "None"
+        encoding: "None"
+    });
+});
+
+document.querySelector("#assembled-tab").addEventListener("click", () => {
+    document.querySelector("#assembled-selection").innerHTML = "";
+    rsg.setState({
+        commandType: CommandType.Assembled,
+        encoding: "None"
     });
 });
 
@@ -117,6 +126,27 @@ const parsePortOrDefault = function (value, defaultPort = 9001) {
     return isValidPort ? number : defaultPort;
 };
 
+const toBytes = function (ip, port) {
+
+    if (ip.split('.').length == 4) {
+        ip = ip.split('.').map(x => {
+            let octet = parseInt(x);
+            if (!isNaN(octet) && ((octet >= 0) && (octet <= 0xFF)))
+                return `\\x${octet.toString(16).padStart(2, 0)}`;
+            return "\\x..";
+        }).join('');
+    }
+    else ip = "\\x..\\x..\\x..\\x..";
+
+    if (!isNaN(port = parseInt(port))) {
+        port = port.toString(16).padStart(4, 0);
+        port = port.match(/.{2}/g).map(b => `\\x${b}`).join('');
+    }
+    else port = "\\x..\\x..";
+
+    return {ip, port};
+}
+
 const rsg = {
     ip: (query.get('ip') || localStorage.getItem('ip') || '10.10.10.10').replace(/[^a-zA-Z0-9.\-]/g, ''),
     port: parsePortOrDefault(query.get('port') || localStorage.getItem('port')),
@@ -130,6 +160,7 @@ const rsg = {
         [CommandType.BindShell]: filterCommandData(rsgData.reverseShellCommands, { commandType: CommandType.BindShell })[0].name,
         [CommandType.MSFVenom]: filterCommandData(rsgData.reverseShellCommands, { commandType: CommandType.MSFVenom })[0].name,
         [CommandType.HoaxShell]: filterCommandData(rsgData.reverseShellCommands, { commandType: CommandType.HoaxShell })[0].name,
+        [CommandType.Assembled]: filterCommandData(rsgData.reverseShellCommands, { commandType: CommandType.Assembled })[0].name,
     },
     commandType: CommandType.ReverseShell,
     filterOperatingSystem: query.get('filterOperatingSystem') || localStorage.getItem('filterOperatingSystem') || FilterOperatingSystemType.All,
@@ -151,6 +182,10 @@ const rsg = {
         [CommandType.HoaxShell]: {
             listSelection: '#hoaxshell-selection',
             command: '#hoaxshell-command'
+        },
+        [CommandType.Assembled]: {
+            listSelection: '#assembled-selection',
+            command: '#assembled-command'
         }
     },
 
@@ -216,7 +251,6 @@ const rsg = {
 
     generateReverseShellCommand: () => {
         let command
-
         if (rsg.getSelectedCommandName() === 'PowerShell #3 (Base64)') {
             const encoder = (text) => text;
             const payload = rsg.insertParameters(rsgData.specialCommands['PowerShell payload'], encoder)
@@ -233,10 +267,27 @@ const rsg = {
                 }
                 return result;
             }
-        } else {
+        } else if (rsg.getSelectedCommandName() === 'PowerShell #5 (stderr support) (Base64)') {
+            const encoder = (text) => text;
+            const payload = rsg.insertParameters(rsgData.specialCommands['PowerShell +stderr payload'], encoder)
+                command = "powershell -e " + btoa(toBinary(payload))
+            function toBinary(string) {
+                const codeUnits = new Uint16Array(string.length);
+                for (let i = 0; i < codeUnits.length; i++) {
+                codeUnits[i] = string.charCodeAt(i);
+                }
+                const charCodes = new Uint8Array(codeUnits.buffer);
+                let result = '';
+                for (let i = 0; i < charCodes.byteLength; i++) {
+                result += String.fromCharCode(charCodes[i]);
+                }
+                return result;
+            }
+        }
+        else {
             command = rsg.getReverseShellCommand()
         }
-
+        
         const encoding = rsg.getEncoding();
         if (encoding === 'Base64') {
             command = rsg.insertParameters(command, (text) => text)
@@ -320,10 +371,21 @@ const rsg = {
     },
 
     insertParameters: (command, encoder) => {
+
+        let ip    = rsg.getIP();
+        let port  = rsg.getPort();
+        let shell = rsg.getShell();
+
+        if (rsg.commandType === CommandType.Assembled) {  
+            const {ip: _ip, port: _port} = toBytes(ip, port)
+            ip = _ip; port = _port
+        }
+
         return command
-            .replaceAll(encoder('{ip}'), encoder(rsg.getIP()))
-            .replaceAll(encoder('{port}'), encoder(String(rsg.getPort())))
-            .replaceAll(encoder('{shell}'), encoder(rsg.getShell()))
+            .replaceAll(encoder('{ip}'), encoder(ip))
+            .replaceAll(encoder('{port}'), encoder(String(port)))
+            .replaceAll(encoder('{shell}'), encoder(shell))
+
     },
 
     update: () => {
@@ -365,7 +427,9 @@ const rsg = {
                 commandType: rsg.commandType
             }
         );
-
+        const listSelectionSelector = rsg.uiElements[rsg.commandType].listSelection;
+        const listSelectionElement = document.querySelector(listSelectionSelector);
+        const previousScrollTop = listSelectionElement?.scrollTop || 0;
         const documentFragment = document.createDocumentFragment();
         if (filteredItems.length === 0) {
             const emptyMessage = document.createElement("button");
@@ -402,13 +466,70 @@ const rsg = {
             documentFragment.appendChild(selectionButton);
         })
 
-        const listSelectionSelector = rsg.uiElements[rsg.commandType].listSelection;
-        document.querySelector(listSelectionSelector).replaceChildren(documentFragment)
+        listSelectionElement.replaceChildren(documentFragment);
+        listSelectionElement.scrollTop = previousScrollTop;
     },
 
     updateListenerCommand: () => {
         const privilegeWarning = document.querySelector("#port-privileges-warning");
         let command = listenerSelect.value;
+
+        const selectedCommandName = rsg.getSelectedCommandName();
+        const udpPayloads = [
+            'Bash udp',
+            'ncat udp',
+        ];
+        let isUDP = false;
+        if (udpPayloads.includes(selectedCommandName)) {
+            isUDP = true;
+        }
+
+        if (isUDP) {
+            let udpSupported = true;
+            if (/^nc\s/.test(command) && !/\s-u(\s|$)/.test(command)) {
+                command = command.replace(/^(nc)(\s+)/, '$1 -u$2');
+            } else if (/^ncat(\s|\.|\s--ssl)/.test(command) && !/\s-u(\s|$)/.test(command)) {
+                if (/--ssl/.test(command)) {
+                    udpSupported = false;
+                    command = '<span class="highlighted-warning">Warning: SSL/TLS (--ssl) is not supported over UDP with ncat.</span>';
+                } else {
+                    command = command.replace(/^(ncat(\.exe)?( --ssl)?)(\s+)/, '$1 -u$4');
+                }
+            } else if (/^busybox nc\s/.test(command) && !/\s-u(\s|$)/.test(command)) {
+                command = command.replace(/^(busybox nc)(\s+)/, '$1 -u$2');
+            } else if (/^rlwrap -cAr nc\s/.test(command) && !/\s-u(\s|$)/.test(command)) {
+                command = command.replace(/^(rlwrap -cAr nc)(\s+)/, '$1 -u$2');
+            } else if (/^nc freebsd\s/.test(command)) {
+                command = command.replace(/^nc freebsd\s+-lvn(\s+){port}/, 'nc freebsd -lun {port}');
+            } else if (/^rcat listen/.test(command) && !/\s-u(\s|$)/.test(command)) {
+                command = command.replace(/^(rcat listen)(\s+)/, '$1 -u$2');
+            } else if (/^python3 -m pwncat( -m windows)?(\s+)/.test(command) && !/\s-u(\s|$)/.test(command)) {
+                command = command.replace(/^(python3 -m pwncat( -m windows)?)(\s+)/, '$1 -u$3');
+            } else if (/^socat\b/.test(command)) {
+                command = command.replace(/TCP-LISTEN:/g, 'UDP-LISTEN:').replace(/TCP:/g, 'UDP:');
+            } else if (/^openssl\b/.test(command)) {
+                const dtlsCmd = 'openssl s_server -dtls -accept {port} -cert server-cert.pem -key server-key.pem';
+                command = '<code>' + dtlsCmd + '</code>';
+            } else if (/^msfconsole\b/.test(command)) {
+                udpSupported = false;
+                command = '<span class="highlighted-warning">Warning: UDP payloads are not currently supported in msfconsole by this generator.</span>';
+            } else if (/^powercat\b/.test(command)) {
+                udpSupported = false;
+                command = '<span class="highlighted-warning">Warning: powercat does not support UDP listeners.</span>';
+            } else if (/hoaxshell-listener\.py/.test(command)) {
+                udpSupported = false;
+                command = '<span class="highlighted-warning">Warning: hoaxshell does not support UDP listeners.</span>';
+            } else if (/stty raw -echo; \(stty size; cat\) \| nc /.test(command)) {
+                udpSupported = false;
+                command = '<span class="highlighted-warning">Warning: UDP is not natively supported for Windows ConPty listeners.</span>';
+            }
+            if (!udpSupported && !/highlighted-warning/.test(command)) {
+                command = '<span class="highlighted-warning">Warning: This listener may not support UDP. Please verify manually.</span>';
+            }
+        }
+
+
+
         command = rsg.highlightParameters(command)
         command = command.replace('{port}', rsg.getPort())
         command = command.replace('{ip}', rsg.getIP())
@@ -422,6 +543,13 @@ const rsg = {
             privilegeWarning.style.visibility = "hidden";
         }
 
+        let icon = '🚀';
+        if (/<span class=\"highlighted-warning\">|Warning:|Error:|💥/.test(command)) {
+            icon = '💥';
+        }
+        // Set the icon in the .prompt-sign element (do not change HTML or styles)
+        const promptSign = listenerCommand.parentElement.querySelector('.prompt-sign');
+        if (promptSign) promptSign.textContent = icon;
         listenerCommand.innerHTML = command;
     },
 
@@ -435,6 +563,17 @@ const rsg = {
     updateReverseShellCommand: () => {
         const command = rsg.generateReverseShellCommand();
         const commandSelector = rsg.uiElements[rsg.commandType].command;
+        // Set dynamic icon (🚀 for normal, 💥 for error/warning)
+        let icon = '🚀';
+        if (/<span class=\"highlighted-warning\">|Warning:|Error:|💥/.test(command)) {
+            icon = '💥';
+        }
+        // Set the icon in the .prompt-sign element for the current command area
+        const commandPre = document.querySelector(commandSelector);
+        if (commandPre && commandPre.parentElement) {
+            const promptSign = commandPre.parentElement.querySelector('.prompt-sign');
+            if (promptSign) promptSign.textContent = icon;
+        }
         document.querySelector(commandSelector).innerHTML = command;
     },
 
@@ -521,6 +660,10 @@ document.querySelector('#copy-msfvenom-command').addEventListener('click', () =>
 
 document.querySelector('#copy-hoaxshell-command').addEventListener('click', () => {
     rsg.copyToClipboard(hoaxShellCommand.innerText)
+})
+
+document.querySelector('#copy-assembled-command').addEventListener('click', () => {
+    rsg.copyToClipboard(assembledCommand.innerText)
 })
 
 var downloadButton = document.querySelectorAll(".download-svg");
